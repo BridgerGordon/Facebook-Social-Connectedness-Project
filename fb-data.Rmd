@@ -1,0 +1,157 @@
+---
+title: "fb-data"
+author: "Bridger Gordon"
+date: "11/16/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+
+#Load in all the libraries.
+
+library(tidyverse)
+library(readxl)
+library(readstata13)
+library(janitor)
+library(usmap)
+library(ggplot2)
+library(tigris)
+library(knitr)
+library(httr)
+library(dplyr)
+library(gt)
+library(lubridate)
+library(moderndive)
+library(purrr)
+library(fs)
+library(infer)
+library(googlesheets4)
+library(tidyr)
+library(scales)
+library(sf)
+library(cdlTools)
+library(stringr)
+library(ggcorrplot)
+library(ggridges)
+
+```
+
+## Title
+
+```{r data_loading}
+
+# This first CSV file is just the county ids (so it matches the counties names with the IDs that are used in the other datasets to refer to a county).
+
+county_info_ids <- read.csv("raw-data/County_info.csv") %>%
+  clean_names() %>%
+  mutate(friend_county = own_county) %>%
+  select(friend_county, level2, level3)
+
+# This uses the same data as the first part but saves it into a separate object that keeps the distance variable for future plots.
+
+closeness_county <- read.csv("raw-data/County_info.csv") %>%
+  clean_names() %>%
+  select(own_county, sh_usfr_within_50miles)
+
+# This second CSV file shows the relative probability of a social connection between two counties in the US.
+
+county_county_connections <- read.csv("raw-data/County_County.csv") %>%
+  clean_names()
+
+# This Stata file shows the demographic information about any given county, including race, political preference, etc.
+
+county_demographics <- read.dta13("raw-data/County_Demographics.dta") %>%
+  clean_names()
+
+```
+
+
+```{r ggplot, warning = FALSE}
+
+#Inner-join the data and select just the relevant columns.
+
+county_combined <- inner_join(county_county_connections, county_info_ids, by = "friend_county") %>%
+  select(own_county, friend_county, rel_prob_friend, level2, level3)
+
+# Create the logarithmic probability of the relative probability. Add a FIPS column to allow us to identify by county.
+
+county_with_ids <- county_combined %>%
+  mutate(fips = own_county) %>%
+  mutate(log_prob = log(rel_prob_friend))  %>%
+  filter(log_prob < 1000000 & log_prob >= 0)
+
+# Inner join the county Social Connectedness Data with the County Demographics Data. Join by friend_county to FIPS code so that the demographic information that shows with the SCI score matches. Mutate the friend county and own county columns into five number FIPS scores. Also take just the first two numbers of the FIPS score to get the State FIPS code for identification. Then we can group by own_State and friend_State to aggregate it up one level since doing it by county was too much information/data to publish to Shiny. Summarize by state-state combo to get a mean demographic score for the state. Then finally for formatting purposes, use the fips() function to add the state names in (and mutate to change Delaware's name since it came out misspelled in the fips() function).
+
+county_detailed <- inner_join(county_with_ids, county_demographics, by = c("friend_county" = "fips")) %>%
+  mutate(friend_county = as.character(friend_county)) %>%
+  mutate(friend_county = str_pad(friend_county, 5, pad = "0")) %>%
+  mutate(friend_state_fips = substr(friend_county, 1, nchar(friend_county)-3)) %>%
+  mutate(own_county = as.character(own_county)) %>%
+  mutate(own_county = str_pad(own_county, 5, pad = "0")) %>%
+  mutate(own_state_fips = substr(own_county, 1, nchar(own_county)-3)) %>%
+  group_by(own_state_fips, friend_state_fips) %>%
+  summarize(log_prob = mean(log_prob),
+            no_highschool_share = mean(no_highschool_share),
+            total_population = mean(total_population),
+            median_age = mean(median_age),
+            pct_white_alone = mean(pct_white_alone),
+            median_hh_income = mean(median_hh_income),
+            share_below_povline = mean(share_below_povline),
+            manufacturing_ind_share = mean(manufacturing_ind_share),
+            obama_share_vs_mccain = mean(obama_share_vs_mccain),
+            gini = mean(gini),
+            frac_kteenbirthfem = mean(frac_kteenbirthfem),
+            pop_density = mean(pop_density)) %>%
+  mutate(friend_state = cdlTools::fips(friend_state_fips, to = "Name")) %>%
+  mutate(own_state = cdlTools::fips(own_state_fips, to = "Name")) %>%
+  mutate(friend_state = ifelse(friend_state == "Deleware", "Delaware", friend_state))  %>%
+  mutate(own_state = ifelse(own_state == "Deleware", "Delaware", own_state))
+
+```
+
+
+```{r}
+
+# Mutate for formatting purposes the county_detailed dataset by omitting NAs, ungrouping, and changing the column names.
+
+correlation_data <- county_detailed %>%
+  na.omit() %>%
+  ungroup() %>%
+  mutate('FB Social Index' = log_prob, 
+         'Share w/o High School degree' = no_highschool_share, 
+         'Population' = total_population, 
+         'Median Age' = median_age, 
+         'County Percentage White' = pct_white_alone, 
+         'Income' = median_hh_income, 
+         'Share below Poverty Line' = share_below_povline, 
+         'Manufacturing Share' = manufacturing_ind_share, 
+         'Obama 2012 Vote Share' = obama_share_vs_mccain, 
+         'Pop. Density' = pop_density
+  ) %>%
+  select('FB Social Index', 
+         'Share w/o High School degree', 
+         'Population', 
+         'Median Age', 
+         'County Percentage White', 
+         'Income', 
+         'Share below Poverty Line', 
+         'Manufacturing Share', 
+         'Obama 2012 Vote Share', 
+         'Pop. Density')
+
+```
+
+```{r save_files}
+
+# Save the necessary objects into RDS files in Shiny so we can replicate globally.
+
+dir_create("FacebookSocialConnectedness/globals")
+saveRDS(county_detailed, file = "FacebookSocialConnectedness/globals/county_detailed")
+saveRDS(closeness_county, file = "FacebookSocialConnectedness/globals/closeness_county")
+saveRDS(correlation_data, file = "FacebookSocialConnectedness/globals/correlations")
+
+
+```
+
+

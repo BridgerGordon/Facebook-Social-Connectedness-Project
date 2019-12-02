@@ -1,0 +1,12 @@
+name: FacebookSocialConnectedness
+title: FacebookSocialConnectedness
+username:
+account: bridger-gordon
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 1514934
+bundleId: 2616645
+url: https://bridger-gordon.shinyapps.io/FacebookSocialConnectedness/
+when: 1574709210.00272
+asMultiple: FALSE
+asStatic: FALSE
